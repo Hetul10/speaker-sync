@@ -4,7 +4,7 @@ export const BUFFER_MS = PLAYBACK_BUFFERS[0];
 const SCHEDULE_AHEAD_S = 0.085;
 const MIN_LEAD_S = 0.008;
 const MAX_RATE_ADJUSTMENT = 0.008;
-const MAX_QUEUED_BLOCKS = 150;
+const MAX_QUEUED_BLOCKS = 160;
 
 export class RelayClock {
   samples = [];

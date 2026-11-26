@@ -168,6 +168,9 @@ test('hosted rooms accept the frontend origin and return public invitations', { 
       if (messages.length === 2) resolve();
     }));
     assert.deepEqual(messages, [{ type: 'source', source: null }, { type: 'buffer', ms: 350 }]);
+    const changedBuffer = once(listener, 'message');
+    host.send(JSON.stringify({ type: 'buffer', ms: 600 }));
+    assert.deepEqual(JSON.parse((await changedBuffer)[0]), { type: 'buffer', ms: 600 });
   } finally {
     for (const socket of sockets) socket.terminate();
     await new Promise(resolve => server.close(resolve));

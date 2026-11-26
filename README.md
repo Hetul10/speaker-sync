@@ -43,7 +43,7 @@ The host shows **Sharing tab audio** once capture starts. **Laptop signal**, **L
 
 ## Sound quality and screen-off listening
 
-- **Listen** plays uncompressed stereo PCM and supports speaker routing and Auto Tune. If you hear crackles or the late-block count keeps rising, open **Playback settings and diagnostics** on the laptop and try a larger playback buffer. Local rooms start at 75 ms. Hosted rooms start at 350 ms to allow for the internet relay.
+- **Listen** plays uncompressed stereo PCM and supports speaker routing and Auto Tune. If you hear crackles or the late-block count keeps rising, open **Playback settings and diagnostics** on the laptop and try a larger playback buffer. Local rooms start at 75 ms. Hosted rooms start at 350 ms. For a hosted room with recurring late blocks, try **Unstable connection** (600 ms), which increases the shared delay for the laptop and all synced listeners.
 - Synced phone playback defaults to **+3 dB**. **Volume boost** adjusts this from 0 to +6 dB with peak limiting. The phone’s own media volume still applies.
 - On iPhone, open the room in Safari and tap **Listen with screen off**. Wait until the stream is playing before locking the phone. This uses Safari’s native media player and a 192 kbps stereo MP3 stream, with the full mix and extra delay. Use ordinary **Listen** for Auto Tune and stereo speaker assignments. Keep the host room open.
 
