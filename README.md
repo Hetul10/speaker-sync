@@ -4,15 +4,21 @@ Play audio from a Chrome tab, a Windows app window, or the whole PC through the 
 
 ## Deploy on Vercel
 
-Vercel serves the website. A single persistent Node.js relay handles rooms and streams audio over secure WebSockets. A room uses the same relay process for the laptop, phones, QR codes, and code lookup. Vercel Functions can route separate connections to different instances and close them when they reach the function duration limit.
+Vercel serves the website. A single Node.js service on Render handles rooms, WebSockets, QR codes, and the screen-off audio stream. Rooms live in the relay process, so keep the relay at one instance. Vercel Functions support WebSockets with a maximum connection duration, and separate connections may reach different instances.
 
-1. Choose the production Vercel project name and its HTTPS URL. You can also use a custom HTTPS domain.
-2. Deploy this repo to a Node.js host that supports long-lived WebSockets. Use Node.js 22 or newer, run `npm ci` and `npm start`, and keep one relay instance. Set `FRONTEND_ORIGIN` to the exact production Vercel origin, for example `https://speaker-sync.vercel.app`. The hosting service should forward HTTPS and WSS traffic to the application's `PORT` and can use `/` as a health check.
-3. Import the GitHub repo into Vercel. Keep the repository root and use the **Other** framework preset. The checked-in configuration runs the build and serves `dist`.
-4. Set Vercel's Production environment variable `RELAY_ORIGIN` to the relay's public HTTPS origin, for example `https://relay.example.com`. Deploy after setting it. Both origin variables take an origin without a path.
-5. Open the production URL in desktop Chrome, select **Create room**, scan the QR code with a phone, and tap **Listen**. Use **Play test click** to check the stream.
+1. Commit and push the app files to your GitHub repository. Include `render.yaml`, `vercel.json`, and the lockfile.
+2. Choose the production domain you want on Vercel, such as `https://your-project.vercel.app`.
+3. In the Render dashboard, choose **New → Blueprint** and connect the same GitHub repository. Render reads `render.yaml` and creates a Free Node web service. When asked for `FRONTEND_ORIGIN`, enter your production Vercel origin. Copy the generated HTTPS relay URL, such as `https://speaker-sync-relay.onrender.com`.
+4. In Vercel, choose **Add New → Project**, import the repository, and use the **Other** framework preset with the repository root. Add `RELAY_ORIGIN` to the **Production** environment with the Render HTTPS URL, then deploy. The checked-in settings install with `npm ci`, build with `npm run build`, and publish `dist`.
+5. Check the actual production domain in Vercel. If it differs from the one you chose, update `FRONTEND_ORIGIN` on Render and redeploy the relay. Each variable takes an origin, with no path.
+6. Open the Render URL followed by `/healthz`. It should return `{"status":"ok","mode":"hosted"}`. Then open the production Vercel URL in desktop Chrome, create a room, scan its QR code on a phone, and tap **Listen**. Use **Play test click** to check the stream.
 
-The relay accepts browser WebSockets from the exact configured frontend origin. Use that URL when testing. To use a Vercel preview URL, configure a separate relay with that preview origin. Rooms end when the host disconnects or the relay restarts.
+| Service | Variable | Example value |
+| --- | --- | --- |
+| Render relay | `FRONTEND_ORIGIN` | `https://your-project.vercel.app` |
+| Vercel website | `RELAY_ORIGIN` | `https://speaker-sync-relay.onrender.com` |
+
+The Render Free plan can take about a minute to wake after inactivity. Visit `/healthz` and wait for the response before opening a room if the relay is cold. The relay accepts requests from the exact Vercel origin you configure. Use the production domain for QR testing. A Vercel Preview deployment needs a relay configured for its preview origin. Rooms end when the host disconnects or the relay restarts.
 
 ## Start a room
 
@@ -33,13 +39,19 @@ The relay accepts browser WebSockets from the exact configured frontend origin. 
    App window, Whole PC, and Keep original laptop audio use Windows’ normal playback. Phones still play the buffered stream, so the laptop can be ahead. Chrome requires a video track for capture. Speaker Sync uses it only to verify the selection and detect when sharing ends.
 5. Use **Stop sharing** to return the tab to normal playback or **End room** to disconnect the phone.
 
-The host shows **Sharing tab audio** once the capture starts. **Laptop signal** shows whether the source contains sound. **Laptop playback** and **Phone playback** show when each browser receives data and schedules sound. If both devices are silent, start with **Laptop signal**. If the phone reports **Sound scheduled** and you hear nothing, check the iPhone’s media volume and output device.
+The host shows **Sharing tab audio** once capture starts. **Laptop signal**, **Laptop playback**, and **Phone playback** in the diagnostics help you track where audio stops.
+
+## Sound quality and screen-off listening
+
+- **Listen** plays uncompressed stereo PCM and supports speaker routing and Auto Tune. If you hear crackles or the late-block count keeps rising, open **Playback settings and diagnostics** on the laptop and try **Smooth** (125 ms) or **Stable** (200 ms). The room starts at 75 ms.
+- Synced phone playback defaults to **+3 dB**. **Volume boost** adjusts this from 0 to +6 dB with peak limiting. The phone’s own media volume still applies.
+- On iPhone, open the room in Safari and tap **Listen with screen off**. Wait until the stream is playing before locking the phone. This uses Safari’s native media player and a 192 kbps stereo MP3 stream, with the full mix and extra delay. Use ordinary **Listen** for Auto Tune and stereo speaker assignments. Keep the host room open.
 
 ## Speaker layout
 
 In **Speakers**, assign each phone to **Copy**, **Left**, or **Right**. **Copy** plays the full stereo mix. **Left** and **Right** play only that channel through the assigned device. For a two-phone stereo setup, put the **Left** phone to your left and the **Right** phone to your right while facing both. Mono sources can sound the same on both sides. You can also assign the laptop when Speaker Sync controls its playback.
 
-If the room plays **Play test click** but tab audio is silent, use **Open test audio in a separate tab** and press **Play click** in that tab. Then share that tab through the Chrome picker. If the test tab works and another tab shows **Silent input**, check that the other tab is playing and try an unprotected source.
+If **Play test click** works but shared tab audio is silent, try a Chrome tab with a known unprotected source. For diagnostics, expand **Playback settings and diagnostics**.
 
 ## Development
 

@@ -5,6 +5,16 @@ export const SIGNAL_WINDOW_MS = 2000;
 export const PLAYBACK_STATES = ['waiting', 'receiving', 'silent', 'scheduled'];
 export const ROOM_SOURCES = ['tab', 'window', 'desktop', 'click'];
 export const SPEAKER_MODES = ['copy', 'left', 'right'];
+export const PLAYBACK_BUFFERS = [75, 125, 200];
+export const PHONE_BOOST_DB = 3;
+
+export function boostSample(sample, gain) {
+  if (gain === 1) return sample;
+  const value = sample * gain;
+  const level = Math.abs(value);
+  if (level <= 0.8) return value;
+  return Math.sign(value) * (1 - 0.2 * Math.exp((0.8 - level) / 0.2));
+}
 
 export function sourceChannel(mode, outputChannel) {
   if (mode === 'left') return 0;

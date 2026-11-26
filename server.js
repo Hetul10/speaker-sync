@@ -6,7 +6,8 @@ import { pathToFileURL } from 'node:url';
 import QRCode from 'qrcode';
 import { WebSocketServer, WebSocket } from 'ws';
 import { httpsOrigin } from './origin.js';
-import { MAX_PACKET_BYTES, MAX_TUNE_OFFSET_MS, PLAYBACK_STATES, readPacket, ROOM_SOURCES, SPEAKER_MODES, TUNE_SEPARATION_MS } from './public/protocol.js';
+import { BackgroundStream } from './background-stream.js';
+import { MAX_PACKET_BYTES, MAX_TUNE_OFFSET_MS, PLAYBACK_BUFFERS, PLAYBACK_STATES, readPacket, ROOM_SOURCES, SPEAKER_MODES, TUNE_SEPARATION_MS } from './public/protocol.js';
 
 const ROOM_ID = /^[a-f0-9]{32}$/;
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -40,12 +41,26 @@ export function createRelay({ lanHost = process.env.LAN_HOST, frontendOrigin = p
   const server = createServer(async (req, res) => {
     const [path, query] = req.url.split('?');
     const match = path.match(/^\/qr\/([a-f0-9]{32})\.png$/);
+    const background = path.match(/^\/listen\/([a-f0-9]{32})\.mp3$/);
     if (req.method !== 'GET') return res.writeHead(405).end();
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Content-Security-Policy', "default-src 'self'; connect-src 'self' ws: wss:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'");
     try {
+      if (path === '/healthz') {
+        return res.writeHead(200, { 'Content-Type': 'application/json' })
+          .end(JSON.stringify({ status: 'ok', mode: hostedOrigin ? 'hosted' : 'lan' }));
+      }
+      if (background) {
+        const room = rooms.get(background[1]);
+        if (!room) return res.writeHead(404).end();
+        const count = room.background?.clients.size ?? 0;
+        if (room.listeners.size + count >= MAX_LISTENERS) return res.writeHead(503).end();
+        if (!room.background || room.background.closed) room.background = new BackgroundStream(() => reportListeners(room));
+        room.background.add(res);
+        return;
+      }
       if (dev && path === '/dev/revision') {
         return res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }).end(devRevision);
       }
@@ -53,7 +68,16 @@ export function createRelay({ lanHost = process.env.LAN_HOST, frontendOrigin = p
         const code = new URLSearchParams(query).get('code');
         if (code !== null) {
           const id = roomCodes.get(code.toUpperCase().replace(/[\s-]/g, ''));
-          return res.writeHead(303, { Location: hostedOrigin + (id ? '/room/' + id : '/join?expired=1') }).end();
+          if (req.headers.accept === 'application/json') {
+            if (hostedOrigin) {
+              res.setHeader('Vary', 'Origin');
+              if (req.headers.origin !== hostedOrigin) return res.writeHead(403).end();
+              res.setHeader('Access-Control-Allow-Origin', hostedOrigin);
+            }
+            return res.writeHead(id ? 200 : 404, { 'Content-Type': 'application/json' })
+              .end(JSON.stringify(id ? { id } : {}));
+          }
+          return res.writeHead(303, { Location: hostedOrigin + (id ? '/?room=' + id : '/?join=1&expired=1') }).end();
         }
       }
       if (match) {
@@ -92,7 +116,8 @@ export function createRelay({ lanHost = process.env.LAN_HOST, frontendOrigin = p
       socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
       return;
     }
-    if (room?.listeners.size >= MAX_LISTENERS || (hostedOrigin && isHost && rooms.size >= MAX_HOSTED_ROOMS)) {
+    if ((room && room.listeners.size + (room.background?.clients.size ?? 0) >= MAX_LISTENERS) ||
+        (hostedOrigin && isHost && rooms.size >= MAX_HOSTED_ROOMS)) {
       socket.end('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n');
       return;
     }
@@ -109,11 +134,11 @@ export function createRelay({ lanHost = process.env.LAN_HOST, frontendOrigin = p
         roomCodes.set(code, id);
         const networks = hostedOrigin ? [] : (lanHost ? [{ address: lanHost, name: 'Configured network' }] : lanAddresses());
         const invites = hostedOrigin
-          ? [{ name: 'Online room', url: hostedOrigin + '/room/' + id }]
+          ? [{ name: 'Online room', url: hostedOrigin + '/?room=' + id }]
           : networks.map(({ address, name }) => ({
-            name, url: 'http://' + address + ':' + server.address().port + '/room/' + id,
+            name, url: 'http://' + address + ':' + server.address().port + '/?room=' + id,
           }));
-        const activeRoom = { host: ws, invites, listeners: new Set(), source: null, nextPhone: 1, tuning: null };
+        const activeRoom = { host: ws, invites, listeners: new Set(), source: null, nextPhone: 1, tuning: null, buffer: PLAYBACK_BUFFERS[0] };
         rooms.set(id, activeRoom);
         send(ws, { type: 'room', id, code, invites });
         ws.on('message', (data, binary) => handleMessage(ws, activeRoom, data, binary));
@@ -121,6 +146,7 @@ export function createRelay({ lanHost = process.env.LAN_HOST, frontendOrigin = p
           clearTimeout(activeRoom.tuning?.timer);
           rooms.delete(id);
           roomCodes.delete(code);
+          activeRoom.background?.close();
           for (const listener of activeRoom.listeners) listener.close(4001, 'Host closed the room');
         });
       } else {
@@ -129,6 +155,7 @@ export function createRelay({ lanHost = process.env.LAN_HOST, frontendOrigin = p
         ws.speaker = 'copy';
         room.listeners.add(ws);
         send(ws, { type: 'source', source: room.source });
+        if (room.buffer !== PLAYBACK_BUFFERS[0]) send(ws, { type: 'buffer', ms: room.buffer });
         if (room.tuning) send(ws, { type: 'tune-state', active: true });
         reportListeners(room);
         ws.on('message', (data, binary) => handleMessage(ws, room, data, binary));
@@ -173,7 +200,8 @@ function reportListeners(room) {
   const phones = [...room.listeners].map(ws => ({
     id: ws.phoneId, ready: ws.tuneReady, measurement: ws.measurement, speaker: ws.speaker,
   }));
-  send(room.host, { type: 'listeners', count: phones.length, phones });
+  const background = room.background?.clients.size ?? 0;
+  send(room.host, { type: 'listeners', count: phones.length + background, phones, ...(background ? { background } : {}) });
 }
 
 function sendTuneDelays(room, resetManual = false) {
@@ -240,6 +268,7 @@ function handleMessage(ws, room, data, binary) {
     if (ws !== room.host || !room.source) return;
     const block = readPacket(new DataView(data.buffer, data.byteOffset, data.byteLength));
     if (!block || block.time <= received - 100 || block.time > received + 1500) return;
+    room.background?.receive(data);
     for (const listener of room.listeners) {
       if (listener.readyState === WebSocket.OPEN && listener.bufferedAmount < MAX_PACKET_BYTES * 4) {
         listener.send(data, { binary: true });
@@ -251,6 +280,11 @@ function handleMessage(ws, room, data, binary) {
   try {
     message = JSON.parse(data.toString());
   } catch {
+    return;
+  }
+  if (ws === room.host && message?.type === 'buffer' && PLAYBACK_BUFFERS.includes(message.ms)) {
+    room.buffer = message.ms;
+    for (const listener of room.listeners) send(listener, { type: 'buffer', ms: room.buffer });
     return;
   }
   if (ws === room.host && message?.type === 'speaker' && SPEAKER_MODES.includes(message.mode)) {

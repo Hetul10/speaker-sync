@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#202833">
+  <meta name="theme-color" content="#11161e">
   <title>Speaker Sync</title>
   <link rel="stylesheet" href="/style.css">
   <script type="module" src="/app.js"></script>
@@ -18,15 +18,15 @@
   </header>
   <main>
     <section class="intro">
-      <h1 id="headline">Host a room</h1>
+      <h1 id="headline">Connect your speakers</h1>
       <p id="intro-copy">Play audio through phones on the same Wi-Fi.</p>
     </section>
     <p id="feedback" role="status" hidden></p>
     <div class="layout host-layout" id="host" hidden>
       <section class="panel pairing" aria-labelledby="pair-title">
         <div class="pair-main">
-          <h2 id="pair-title" tabindex="-1">Connect phones</h2>
-          <p id="pair-help">Create a room to get a QR code and an invite link.</p>
+          <h2 id="pair-title" tabindex="-1">Host a room</h2>
+          <p id="pair-help" role="status" hidden></p>
           <button class="primary" id="create" type="button">Create room</button>
           <div class="join-options" id="join-options" hidden>
             <div class="qr" id="qr-box" hidden>
@@ -45,9 +45,10 @@
           <p id="pair-feedback" role="status" hidden></p>
         </div>
         <div class="pair-help">
-          <details class="instructions" id="connect-guide" open>
+          <details class="instructions" id="connect-guide">
             <summary>How to connect</summary>
             <ol>
+              <li>Create a room on the laptop in desktop Chrome.</li>
               <li id="lan-instruction">Connect the laptop and phones to the same Wi-Fi.</li>
               <li>Scan the QR code, or open the join address and enter the room code.</li>
               <li>Tap <strong>Listen</strong> on each phone.</li>
@@ -74,13 +75,15 @@
             <option value="desktop">Whole PC</option>
           </select>
         </label>
-        <p id="capture-help">Choose a tab in Chrome’s picker and turn on tab audio.</p>
         <button class="primary" id="capture" type="button" disabled>Share audio</button>
+        <details class="instructions">
+          <summary>How to share audio</summary>
+          <p id="capture-help">Choose a tab in Chrome’s picker and turn on tab audio.</p>
+        </details>
         <p id="capture-feedback" role="status" hidden></p>
       </section>
       <section class="panel" id="speakers-panel" aria-labelledby="speaker-title" hidden>
         <h2 id="speaker-title">Speakers</h2>
-        <p>Choose <strong>Copy</strong> for the full mix. For stereo, place one phone on your left and one on your right, then assign each its channel.</p>
         <dl class="speaker-layout" aria-label="Speaker positions from your seat">
           <div><dt>Left</dt><dd id="layout-left">—</dd></div>
           <div><dt>Copy</dt><dd id="layout-copy">—</dd></div>
@@ -88,23 +91,36 @@
         </dl>
         <label class="speaker-row" id="laptop-speaker-row" hidden><strong>Laptop</strong><span class="visually-hidden">Speaker channel</span><select id="laptop-speaker"></select></label>
         <ul id="speaker-phones" class="phone-list"></ul>
+        <details class="instructions">
+          <summary>How speaker channels work</summary>
+          <p>Choose <strong>Copy</strong> for the full mix. For stereo, place one phone on your left and one on your right, then assign each its channel.</p>
+        </details>
       </section>
       <section class="panel" id="auto-tune" aria-labelledby="tune-title" hidden>
         <h2 id="tune-title">Auto Tune</h2>
-        <p>Two short tones help the laptop microphone measure each phone’s delay.</p>
         <ul id="tune-phones" class="phone-list"></ul>
         <p id="tune-status" role="status">Connect a phone and tap Listen to start.</p>
         <button class="secondary" id="test" type="button" disabled>Play test click</button>
+        <details class="instructions">
+          <summary>How Auto Tune works</summary>
+          <p>Use the laptop speakers, keep the phone page open, and allow the laptop microphone to hear both test tones.</p>
+        </details>
       </section>
       <details class="panel" id="advanced" hidden>
         <summary>Playback settings and diagnostics</summary>
         <div class="advanced-layout">
           <section aria-labelledby="audio-settings-title">
             <h3 id="audio-settings-title">Audio settings</h3>
+            <label class="capture-source">Playback buffer
+              <select id="playback-buffer">
+                <option value="75">Low latency · 75 ms</option>
+                <option value="125">Smooth · 125 ms</option>
+                <option value="200">Stable · 200 ms</option>
+              </select>
+            </label>
             <label class="local-audio" id="local-audio-option">
               <input type="checkbox" id="keep-local"> Keep original laptop audio
             </label>
-            <a class="invite-link source-link" href="/?test-audio" target="_blank" rel="noopener">Open a test audio tab</a>
           </section>
           <section id="host-sync" aria-labelledby="manual-title"><h3 id="manual-title">Manual sync</h3></section>
           <section aria-labelledby="playback-title">
@@ -124,20 +140,34 @@
           <h2 id="listen-title">Listen on this phone</h2>
           <span id="listen-status" class="source-status" role="status">Ready</span>
         </div>
-        <p>Keep this page open while listening. Use the phone’s volume buttons to adjust loudness.</p>
         <p class="channel-label" id="phone-channel" hidden></p>
         <button class="primary" id="listen">Listen</button>
+        <button class="secondary" id="listen-background" type="button">Listen with screen off</button>
+        <audio id="background-audio" preload="none" controls hidden></audio>
+        <label id="volume-control" for="volume-boost">Volume boost <output id="volume-amount" for="volume-boost">+3 dB</output></label>
+        <input id="volume-boost" type="range" min="0" max="6" step="1" value="3">
+        <details class="instructions">
+          <summary>Listening tips</summary>
+          <p>Keep this page open while listening. Use the phone’s volume buttons to adjust loudness.</p>
+          <p>For screen-off listening, open the room in Safari and start that player before locking the phone. It plays the full mix with extra delay.</p>
+        </details>
+        <button class="text-button" id="leave-listener" type="button">Enter a different room code</button>
       </section>
       <details class="panel" id="phone-sync"><summary>Manual sync</summary></details>
     </div>
-    <section class="panel join-panel" id="join-room" hidden>
+    <section class="panel join-panel" id="join-room" aria-labelledby="join-title" hidden>
+      <h2 id="join-title">Join with a code</h2>
       <form method="get" action="/join">
         <label for="join-code">Room code</label>
-        <input type="text" id="join-code" name="code" placeholder="ABCD-EFGH" required maxlength="16" autocapitalize="characters" autocomplete="off" spellcheck="false" aria-describedby="join-help">
-        <p id="join-help">Enter the code shown on the laptop. Keep both devices on the same Wi-Fi.</p>
+        <input type="text" id="join-code" name="code" placeholder="ABCD-EFGH" required maxlength="16" autocapitalize="characters" autocomplete="off" spellcheck="false" aria-describedby="join-error">
         <p id="join-error" role="alert" hidden>That code didn’t match an active room. Check the code on the laptop and try again.</p>
         <button class="primary" type="submit">Join room</button>
       </form>
+      <details class="instructions">
+        <summary>Where to find the code</summary>
+        <p id="join-help">Use the code next to the QR on the laptop. Keep both devices on the same Wi-Fi.</p>
+      </details>
+      <button class="text-button" id="host-entry" type="button" hidden>Host instead</button>
     </section>
     <section class="panel" id="capture-test" hidden>
       <h2>Test audio source</h2>
@@ -148,7 +178,10 @@
   </main>
   <template id="sync-template">
     <div class="sync-heading"><span>Extra delay</span><output>0 ms</output></div>
-    <p>Use the test click. Add delay on the speaker you hear first.</p>
+    <details class="instructions">
+      <summary>How to adjust sync</summary>
+      <p>Use the test click. Add delay on the speaker you hear first.</p>
+    </details>
     <p class="auto-delay" hidden></p>
     <label class="sync-slider"><span class="visually-hidden">Extra delay on this device</span><input type="range" min="0" max="300" step="1" value="0"></label>
     <div class="scale"><span>0 ms</span><button class="text-button">Reset</button><span>300 ms</span></div>

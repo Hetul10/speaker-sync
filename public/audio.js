@@ -1,7 +1,7 @@
-import { CHANNELS, HEADER_BYTES, readPacket, SIGNAL_WINDOW_MS, SOUND_THRESHOLD, sourceChannel } from './protocol.js';
+import { boostSample, CHANNELS, HEADER_BYTES, PLAYBACK_BUFFERS, readPacket, SIGNAL_WINDOW_MS, SOUND_THRESHOLD, sourceChannel } from './protocol.js';
 
-export const BUFFER_MS = 75;
-const SCHEDULE_AHEAD_S = 0.055;
+export const BUFFER_MS = PLAYBACK_BUFFERS[0];
+const SCHEDULE_AHEAD_S = 0.085;
 const MIN_LEAD_S = 0.008;
 const MAX_RATE_ADJUSTMENT = 0.008;
 
@@ -57,6 +57,7 @@ export class Playback {
     this.nodes = new Set();
     this.delay = 0;
     this.speaker = 'copy';
+    this.volume = 1;
     this.late = 0;
     this.timer = setInterval(() => this.pump(), 15);
   }
@@ -108,7 +109,8 @@ export class Playback {
         const samples = buffer.getChannelData(channel);
         const inputChannel = sourceChannel(this.speaker, channel);
         for (let i = 0; i < block.frames; i++) {
-          samples[i] = block.packet.getInt16(HEADER_BYTES + (i * CHANNELS + inputChannel) * 2, true) / 32768;
+          const sample = block.packet.getInt16(HEADER_BYTES + (i * CHANNELS + inputChannel) * 2, true) / 32768;
+          samples[i] = boostSample(sample, this.volume);
           peak = Math.max(peak, Math.abs(samples[i]));
         }
       }

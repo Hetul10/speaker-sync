@@ -1,16 +1,18 @@
 import { BUFFER_MS, outputClock, Playback, RelayClock } from './audio.js';
-import { MAX_PACKET_BYTES, SIGNAL_WINDOW_MS, SOUND_THRESHOLD, SPEAKER_MODES, TUNE_SEPARATION_MS } from './protocol.js';
+import { MAX_PACKET_BYTES, PHONE_BOOST_DB, PLAYBACK_BUFFERS, SIGNAL_WINDOW_MS, SOUND_THRESHOLD, SPEAKER_MODES, TUNE_SEPARATION_MS } from './protocol.js';
 import { audioTime, captureTones, measureOffset, playTone } from './tune.js';
 
 const $ = id => document.getElementById(id);
 const roomPath = /^\/room\/([a-f0-9]{32})\/?$/;
-const roomId = location.pathname.match(roomPath)?.[1];
-const isPhone = Boolean(roomId);
+const params = new URLSearchParams(location.search);
+const roomPattern = /^[a-f0-9]{32}$/;
+const roomParam = params.get('room');
+let roomId = roomPattern.test(roomParam ?? '') ? roomParam : location.pathname.match(roomPath)?.[1];
 const isLocal = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
 const hostedRelay = document.querySelector('meta[name="speaker-sync-relay"]')?.content;
 const relayOrigin = hostedRelay || location.origin;
 const isHostPage = isLocal || Boolean(hostedRelay && location.protocol === 'https:');
-const isJoin = location.pathname === '/join' || (!isHostPage && !isPhone);
+let joinOnly = params.has('join') || location.pathname === '/join' || !isHostPage;
 const AudioContextClass = window.AudioContext ?? window.webkitAudioContext;
 const canHost = isHostPage && Boolean(AudioContextClass && 'audioWorklet' in AudioContextClass.prototype);
 const mediaDevices = navigator.mediaDevices;
@@ -21,7 +23,10 @@ let host = null;
 let phone = null;
 let hostDelay = 0;
 let phoneDelay = 0;
+let phoneBoost = PHONE_BOOST_DB;
+let backgroundAttempt = 0;
 let tuneNumber = 0;
+let joining = false;
 const speakerLabels = { copy: 'Copy', left: 'Left', right: 'Right' };
 
 const playbackLabels = {
@@ -239,8 +244,8 @@ function showTunePhones() {
   updateStatus('tune-status', !phones.length ? 'Connect a phone and tap Listen to start.' :
     windowsPlayback ? 'Stop Windows audio sharing or switch to synchronized Chrome tab playback to tune.' :
     !available ? 'Open in desktop Chrome to use the laptop microphone.' :
-    host.tuneMessage || (host.autoDelay ? 'Laptop Auto Tune delay · ' + host.autoDelay + ' ms' :
-      'Use Tune to align playback. Keep the phone page open and let the laptop microphone hear both tones.'));
+    host.tuneMessage || (host.autoDelay ? 'Laptop Auto Tune delay · ' + host.autoDelay + ' ms' : ''));
+  $('tune-status').hidden = !$('tune-status').textContent;
 }
 
 async function tunePhone(phoneId) {
@@ -304,14 +309,17 @@ async function tunePhone(phoneId) {
 function showHost() {
   const ready = Boolean(host?.id);
   const source = host?.source;
-  updateStatus('room-status', ready ? host.count + (host.count === 1 ? ' phone connected' : ' phones connected')
-    : host ? 'Creating room' : 'Ready to host');
+  updateStatus('room-status', ready ? host.count + (host.count === 1 ? ' listener' : ' listeners') +
+    (host.background ? ' · ' + host.background + ' screen-off' : '') : host ? 'Creating room' : 'Ready to host');
   document.body.classList.toggle('paired', ready);
+  document.body.classList.toggle('entry-layout', !ready);
   document.body.classList.toggle('playing', Boolean(source));
   $('create').hidden = ready;
-  $('create').disabled = !canHost || Boolean(host);
+  $('create').disabled = !canHost || Boolean(host) || joining;
+  $('join-room').hidden = ready;
   $('end').hidden = !ready;
-  updateStatus('headline', ready ? 'Room controls' : 'Host a room');
+  updateStatus('headline', ready ? 'Room controls' : 'Connect your speakers');
+  updateStatus('pair-title', ready ? 'Invite phones' : 'Host a room');
   $('intro-copy').hidden = ready;
   for (const panel of ['share-panel', 'speakers-panel', 'auto-tune', 'advanced']) $(panel).hidden = !ready;
   $('pair-actions').hidden = !ready;
@@ -326,6 +334,8 @@ function showHost() {
   $('capture').textContent = captureModes[source] ? 'Stop sharing' : 'Share audio';
   $('capture-source').disabled = Boolean(host?.pending || captureModes[source]);
   $('keep-local').disabled = $('capture-source').disabled;
+  $('playback-buffer').disabled = Boolean(host?.tuning);
+  $('playback-buffer').value = host?.buffer ?? BUFFER_MS;
   $('test').textContent = source === 'click' ? 'Stop test click' : 'Play test click';
   $('host-sync').querySelector('input').disabled = windowsPlayback || Boolean(host?.tuning);
   $('host-sync').querySelector('button').disabled = windowsPlayback || Boolean(host?.tuning);
@@ -361,6 +371,7 @@ function showHostDiagnostics() {
   const report = host?.phoneReport;
   const status = live && report?.source === host.source && now - report.at < 4500 ? report.status : null;
   updateStatus('phone-playback', !host?.count ? 'No phone listening' :
+    !host.phones?.length && host.background ? 'Screen-off stream connected' :
     !live ? 'Connected · waiting for source' : (playbackLabels[status] ?? 'Waiting for phone report'), status === 'scheduled');
 }
 
@@ -375,9 +386,9 @@ function updateInvite() {
   if (invite) {
     $('qr').src = relayOrigin + '/qr/' + host.id + '.png?network=' + index;
     $('invite-link').href = invite.url;
-    const address = new URL('/join', invite.url);
+    const address = new URL('/?join=1', invite.url);
     $('join-address').href = address.href;
-    $('join-address').textContent = address.href;
+    $('join-address').textContent = address.origin;
     $('room-code').textContent = host.code ? host.code.slice(0, 4) + '-' + host.code.slice(4) : '';
   } else {
     $('qr').removeAttribute('src');
@@ -412,8 +423,9 @@ function endHost(session, unexpected = false) {
   stopSource(session);
   session.socket.close();
   $('network-field').hidden = true;
-  updateStatus('pair-help', 'Create a room to get a QR code and an invite link.');
-  $('connect-guide').open = true;
+  updateStatus('pair-help', '');
+  $('pair-help').hidden = true;
+  $('connect-guide').open = false;
   $('advanced').open = false;
   pairNotice();
   updateInvite();
@@ -424,9 +436,10 @@ function endHost(session, unexpected = false) {
 }
 
 function startHost() {
+  if (joining || host) return;
   notice();
   pairNotice();
-  const session = { count: 0, source: null, speaker: 'copy' };
+  const session = { count: 0, source: null, speaker: 'copy', buffer: BUFFER_MS };
   Object.assign(session, socketFor('/live/host', {
     clock: showHost,
     message(message) {
@@ -438,15 +451,15 @@ function startHost() {
         $('network').replaceChildren(...session.invites.map(({ name, url }, index) =>
           new Option(name + ' · ' + new URL(url).hostname, index)));
         $('network-field').hidden = session.invites.length < 2;
-        $('pair-help').textContent = session.invites.length
-          ? 'Scan to open the room, then tap Listen.'
-          : 'Connect this laptop to Wi-Fi and create a new room to get a phone link.';
+        $('pair-help').hidden = session.invites.length > 0;
+        updateStatus('pair-help', session.invites.length ? '' : 'Connect this laptop to Wi-Fi and create a new room to get a phone link.');
         $('connect-guide').open = false;
         updateInvite();
       }
       if (message.type === 'listeners') {
         if (session.count !== message.count) session.phoneReport = null;
         session.count = message.count;
+        session.background = message.background ?? 0;
         session.phones = message.phones;
       }
       if (message.type === 'phone-playback') session.phoneReport = { ...message, at: performance.now() };
@@ -558,7 +571,7 @@ async function chooseSource(kind) {
       const stamp = outputClock(context);
       const packet = new DataView(pcm);
       const captureTime = stamp.performanceTime + (packet.getFloat64(4, true) / context.sampleRate - stamp.contextTime) * 1000;
-      packet.setFloat64(12, captureTime + session.clock.offset + BUFFER_MS, true);
+      packet.setFloat64(12, captureTime + session.clock.offset + session.buffer, true);
       audio.playback?.receive(pcm);
       if (session.socket.readyState === WebSocket.OPEN && session.socket.bufferedAmount < MAX_PACKET_BYTES * 4) {
         session.socket.send(pcm);
@@ -593,19 +606,64 @@ async function chooseSource(kind) {
 }
 
 function showPhone() {
+  const player = $('background-audio');
+  const background = player.hasAttribute('src');
   const connected = phone?.socket?.readyState === WebSocket.OPEN;
   const status = phone?.source && phone.playback?.status();
-  updateStatus('room-status', connected ? 'Room connected' : phone ? 'Connecting' : 'Ready to join');
-  updateStatus('listen-status', connected ? (playbackLabels[status] ?? 'Waiting for host') : phone ? 'Connecting' : 'Ready');
-  $('listen').textContent = phone ? 'Pause' : 'Listen';
-  document.body.classList.toggle('paired', connected);
-  document.body.classList.toggle('playing', connected && status === 'scheduled');
+  updateStatus('room-status', background ? 'Screen-off player' : connected ? 'Room connected' : phone ? 'Connecting' : 'Ready to join');
+  updateStatus('listen-status', background ? (player.readyState < 2 ? 'Buffering stream' : player.paused ? 'Paused' : 'Playing') :
+    connected ? (playbackLabels[status] ?? 'Waiting for host') : phone ? 'Connecting' : 'Ready');
+  $('listen').textContent = background ? 'Switch to synced listening' : phone ? 'Pause' : 'Listen';
+  $('listen-background').textContent = background ? 'Stop screen-off player' : 'Listen with screen off';
+  $('volume-control').hidden = $('volume-boost').hidden = background;
+  document.body.classList.toggle('paired', connected || background);
+  document.body.classList.toggle('playing', (connected && status === 'scheduled') || (background && !player.paused));
   $('phone-channel').hidden = !connected;
   updateStatus('phone-channel', 'Speaker mode · ' + (speakerLabels[phone?.playback?.speaker] ?? 'Copy'));
   if (phone?.tuning) updateStatus('listen-status', 'Auto Tune in progress');
   showAutoDelay('phone-sync', phone?.autoDelay ?? 0);
   $('phone-sync').querySelector('input').disabled = Boolean(phone?.tuning);
   $('phone-sync').querySelector('button').disabled = Boolean(phone?.tuning);
+}
+
+function useMediaAudioSession() {
+  if (!navigator.audioSession) return;
+  try { navigator.audioSession.type = 'playback'; } catch { /* Older iPhone browsers can use their default audio session. */ }
+}
+
+function stopBackground(message = '') {
+  const player = $('background-audio');
+  if (!player.hasAttribute('src')) return;
+  backgroundAttempt++;
+  player.pause();
+  player.removeAttribute('src');
+  player.load();
+  player.hidden = true;
+  if (navigator.mediaSession) navigator.mediaSession.metadata = null;
+  showPhone();
+  notice(message);
+}
+
+function listenInBackground() {
+  const player = $('background-audio');
+  if (player.hasAttribute('src')) {
+    stopBackground();
+    return;
+  }
+  if (phone) stopPhone(phone);
+  useMediaAudioSession();
+  notice();
+  const url = new URL('/listen/' + roomId + '.mp3', relayOrigin).href;
+  const attempt = ++backgroundAttempt;
+  player.src = url;
+  player.hidden = false;
+  if (navigator.mediaSession && typeof MediaMetadata === 'function') {
+    navigator.mediaSession.metadata = new MediaMetadata({ title: 'Speaker Sync', artist: 'Live room' });
+  }
+  showPhone();
+  void player.play().catch(() => {
+    if (attempt === backgroundAttempt) stopBackground('The screen-off stream could not start. Check that the room is still open and try Safari.');
+  });
 }
 
 function stopPhone(session, message = '') {
@@ -619,12 +677,14 @@ function stopPhone(session, message = '') {
 }
 
 async function listen() {
+  stopBackground();
   if (phone) {
     stopPhone(phone);
     return;
   }
   notice();
-  const session = { source: null };
+  useMediaAudioSession();
+  const session = { source: null, buffer: BUFFER_MS };
   phone = session;
   try {
     session.context = new AudioContextClass({ latencyHint: 'interactive' });
@@ -641,6 +701,10 @@ async function listen() {
         if (phone !== session) return;
         if (message.type === 'source') {
           session.source = message.source;
+          session.playback.reset();
+        }
+        if (message.type === 'buffer' && PLAYBACK_BUFFERS.includes(message.ms)) {
+          session.buffer = message.ms;
           session.playback.reset();
         }
         if (message.type === 'speaker' && SPEAKER_MODES.includes(message.mode)) {
@@ -685,6 +749,7 @@ async function listen() {
     }));
     session.playback = new Playback(session.context, session.clock);
     session.playback.delay = phoneDelay;
+    session.playback.volume = 10 ** (phoneBoost / 20);
     session.context.addEventListener('statechange', () => {
       if (phone !== session) return;
       if (session.context.state !== 'running') stopPhone(session, 'Playback was interrupted. Tap Listen to reconnect.');
@@ -695,7 +760,67 @@ async function listen() {
   }
 }
 
-const isCaptureTest = isHostPage && location.pathname === '/' && new URLSearchParams(location.search).has('test-audio');
+function renderRoomView() {
+  const hosting = !roomId && isHostPage && !joinOnly;
+  $('host').hidden = !hosting;
+  $('listener').hidden = !roomId;
+  $('intro-copy').hidden = !hosting;
+  $('host-entry').hidden = !isHostPage || !joinOnly;
+  document.body.classList.toggle('entry-layout', hosting && !host?.id);
+  if (roomId) {
+    $('join-room').hidden = true;
+    updateStatus('headline', 'Room audio');
+    showPhone();
+  } else if (hosting) {
+    showHost();
+  } else {
+    $('join-room').hidden = false;
+    updateStatus('headline', 'Join a room');
+    updateStatus('room-status', 'Join by code');
+  }
+}
+
+async function joinRoom(event) {
+  event.preventDefault();
+  if (joining || host) return;
+  const form = event.currentTarget;
+  const button = form.querySelector('button');
+  const error = $('join-error');
+  error.hidden = true;
+  $('join-code').removeAttribute('aria-invalid');
+  joining = true;
+  button.disabled = true;
+  button.textContent = 'Checking code…';
+  if (!$('host').hidden) showHost();
+  try {
+    const url = new URL('/join', relayOrigin);
+    url.searchParams.set('code', $('join-code').value);
+    const response = await fetch(url, { headers: { Accept: 'application/json' } });
+    if (response.status === 404) {
+      $('join-code').setAttribute('aria-invalid', 'true');
+      throw new Error('That code didn’t match an active room. Check the code on the laptop.');
+    }
+    if (!response.ok) throw new Error('Could not check the room code. Try again.');
+    const { id } = await response.json();
+    if (!roomPattern.test(id ?? '')) throw new Error('Could not check the room code. Try again.');
+    roomId = id;
+    history.replaceState(null, '', '/?room=' + id);
+    form.reset();
+    notice();
+    renderRoomView();
+    $('listen').focus();
+  } catch (failure) {
+    error.textContent = failure instanceof TypeError ? 'Could not reach the room server. Check the connection and try again.' : failure.message;
+    error.hidden = false;
+  } finally {
+    joining = false;
+    button.disabled = false;
+    button.textContent = 'Join room';
+    if (!$('host').hidden) showHost();
+  }
+}
+
+const isCaptureTest = isHostPage && location.pathname === '/' && params.has('test-audio');
 const devRevision = document.documentElement.dataset.devRevision;
 if (devRevision) {
   $('mode-label').textContent = 'DEV MODE · AUTO-RELOAD';
@@ -713,13 +838,13 @@ if (devRevision) {
   }
   setTimeout(checkRevision, 1000);
 }
-if (!isCaptureTest && !isJoin) {
+if (!isCaptureTest) {
   setInterval(() => {
-    if (isPhone) showPhone();
-    else showHostDiagnostics();
-    const session = isPhone ? phone : host;
-    const playback = isPhone ? session?.playback : session?.audio?.playback;
-    const stats = [BUFFER_MS + ' ms playback buffer'];
+    if (roomId) showPhone();
+    else if (!$('host').hidden) showHostDiagnostics();
+    const session = roomId ? phone : host;
+    const playback = roomId ? session?.playback : session?.audio?.playback;
+    const stats = [roomId && $('background-audio').hasAttribute('src') ? 'Screen-off stream' : (session?.buffer ?? BUFFER_MS) + ' ms playback buffer'];
     if (session?.clock?.rtt != null) stats.push(session.clock.rtt + ' ms relay RTT');
     if (playback?.late) stats.push(playback.late + ' late blocks');
     $('metrics').textContent = stats.join(' · ');
@@ -765,29 +890,46 @@ if (isCaptureTest) {
       button.disabled = false;
     }
   });
-} else if (isPhone) {
-  $('listener').hidden = false;
-  $('headline').textContent = 'Room audio';
-  $('intro-copy').hidden = true;
+} else {
   setupSync('phone-sync', value => {
     phoneDelay = value;
     applyDelay(phone?.playback, value + (phone?.autoDelay ?? 0));
   });
   $('listen').addEventListener('click', listen);
-  showPhone();
-} else if (isJoin) {
-  $('join-room').hidden = false;
-  $('headline').textContent = 'Join a room';
-  $('intro-copy').hidden = true;
-  $('room-status').textContent = 'Join by code';
-  $('join-error').hidden = !new URLSearchParams(location.search).has('expired');
-  if (hostedRelay) {
-    $('join-room').querySelector('form').action = relayOrigin + '/join';
-    $('join-help').textContent = 'Enter the code shown on the laptop.';
+  $('listen-background').addEventListener('click', listenInBackground);
+  const backgroundPlayer = $('background-audio');
+  for (const event of ['loadeddata', 'playing', 'waiting', 'pause']) {
+    backgroundPlayer.addEventListener(event, () => { if (roomId) showPhone(); });
   }
-} else {
-  $('host').hidden = false;
+  backgroundPlayer.addEventListener('error', () => stopBackground('The screen-off stream disconnected. Check that the room is still open.'));
+  backgroundPlayer.addEventListener('ended', () => stopBackground('The screen-off stream ended.'));
+  $('volume-boost').addEventListener('input', event => {
+    phoneBoost = Number(event.currentTarget.value);
+    $('volume-amount').value = phoneBoost ? '+' + phoneBoost + ' dB' : '0 dB';
+    if (phone?.playback) phone.playback.volume = 10 ** (phoneBoost / 20);
+  });
+  $('join-error').hidden = !params.has('expired') || Boolean(roomId);
+  const joinForm = $('join-room').querySelector('form');
+  joinForm.addEventListener('submit', joinRoom);
+  $('leave-listener').addEventListener('click', () => {
+    stopBackground();
+    if (phone) stopPhone(phone);
+    roomId = undefined;
+    joinOnly = true;
+    history.replaceState(null, '', '/?join=1');
+    notice();
+    renderRoomView();
+    $('join-code').focus();
+  });
+  $('host-entry').addEventListener('click', () => {
+    joinOnly = false;
+    history.replaceState(null, '', '/');
+    renderRoomView();
+    $('create').focus();
+  });
   if (hostedRelay) {
+    joinForm.action = relayOrigin + '/join';
+    $('join-help').textContent = 'Use the code next to the QR on the laptop.';
     $('intro-copy').textContent = 'Share live audio from this laptop to phones.';
     $('lan-instruction').hidden = true;
   }
@@ -818,6 +960,13 @@ if (isCaptureTest) {
   $('capture').addEventListener('click', () => chooseSource(captureModes[host?.source] ? host.source : $('capture-source').value));
   $('capture-source').addEventListener('change', showCaptureMode);
   $('keep-local').addEventListener('change', showCaptureMode);
+  $('playback-buffer').addEventListener('change', event => {
+    const ms = Number(event.currentTarget.value);
+    if (!host || !PLAYBACK_BUFFERS.includes(ms)) return;
+    host.buffer = ms;
+    host.audio?.playback?.reset();
+    host.socket.send(JSON.stringify({ type: 'buffer', ms }));
+  });
   showCaptureMode();
   $('test').addEventListener('click', () => chooseSource('click'));
   $('browser-help').hidden = canShareTab;
@@ -829,5 +978,5 @@ if (isCaptureTest) {
       pairNotice('Open ' + hostAddress + ' directly in desktop Google Chrome.');
     }
   });
-  showHost();
+  renderRoomView();
 }

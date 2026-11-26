@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import { WebSocket } from 'ws';
 import { createRelay, groupDelays } from '../server.js';
 import { correctedDuration, Playback, RelayClock } from '../public/audio.js';
-import { createPacket, readPacket } from '../public/protocol.js';
+import { boostSample, createPacket, readPacket } from '../public/protocol.js';
 import { chirp, measureOffset } from '../public/tune.js';
 
 test('clock estimates offset from low-RTT replies and corrects drift in either direction', () => {
@@ -20,6 +20,13 @@ test('clock estimates offset from low-RTT replies and corrects drift in either d
   assert.ok(correctedDuration(0.01, 0.020) > 0.01);
   assert.ok(correctedDuration(0.01, -0.020) < 0.01);
   assert.ok(Math.abs(correctedDuration(0.01, 1) / 0.01 - 1) <= 0.008001);
+});
+
+test('phone volume boost raises quiet audio and limits peaks', () => {
+  assert.equal(boostSample(0.25, 2), 0.5);
+  assert.equal(boostSample(-0.25, 2), -0.5);
+  assert.equal(boostSample(0.94, 1), 0.94);
+  assert.ok(boostSample(0.94, 2) < 1);
 });
 
 test('capture worklet packages test clicks and stereo tab input into PCM blocks', async () => {
@@ -123,6 +130,9 @@ test('hosted rooms accept the frontend origin and return public invitations', { 
     return socket;
   }
   try {
+    const health = await fetch(origin + '/healthz');
+    assert.equal(health.status, 200);
+    assert.deepEqual(await health.json(), { status: 'ok', mode: 'hosted' });
     const rejected = connect('/live/host', origin);
     const [rejection] = await once(rejected, 'error');
     assert.match(rejection.message, /403/);
@@ -130,14 +140,23 @@ test('hosted rooms accept the frontend origin and return public invitations', { 
     const host = connect('/live/host', frontendOrigin);
     const [welcome] = await once(host, 'message');
     const { id, code, invites } = JSON.parse(welcome);
-    const roomUrl = frontendOrigin + '/room/' + id;
+    const roomUrl = frontendOrigin + '/?room=' + id;
     assert.deepEqual(invites, [{ name: 'Online room', url: roomUrl }]);
 
     const join = await fetch(origin + '/join?code=' + code, { redirect: 'manual' });
     assert.equal(join.status, 303);
     assert.equal(join.headers.get('location'), roomUrl);
+    const lookup = await fetch(origin + '/join?code=' + code, {
+      headers: { Accept: 'application/json', Origin: frontendOrigin },
+    });
+    assert.equal(lookup.headers.get('access-control-allow-origin'), frontendOrigin);
+    assert.deepEqual(await lookup.json(), { id });
+    const blocked = await fetch(origin + '/join?code=' + code, {
+      headers: { Accept: 'application/json', Origin: 'https://other.example.com' },
+    });
+    assert.equal(blocked.status, 403);
     const expired = await fetch(origin + '/join?code=invalid', { redirect: 'manual' });
-    assert.equal(expired.headers.get('location'), frontendOrigin + '/join?expired=1');
+    assert.equal(expired.headers.get('location'), frontendOrigin + '/?join=1&expired=1');
     const qr = await fetch(origin + '/qr/' + id + '.png');
     assert.equal(qr.headers.get('content-type'), 'image/png');
     await qr.arrayBuffer();
@@ -165,6 +184,7 @@ test('room serves a QR, relays PCM and phone diagnostics, and closes its listene
   try {
     const hostPage = await fetch(origin);
     assert.equal(hostPage.status, 200);
+    assert.deepEqual(await (await fetch(origin + '/healthz')).json(), { status: 'ok', mode: 'lan' });
     const markup = await hostPage.text();
     assert.match(markup, /Speaker Sync/);
     const version = await fetch(origin + '/dev/revision');
@@ -183,9 +203,11 @@ test('room serves a QR, relays PCM and phone diagnostics, and closes its listene
     const joinUrl = origin + '/join?code=' + formattedCode;
     const join = await fetch(joinUrl, { redirect: 'manual' });
     assert.equal(join.status, 303);
-    assert.equal(join.headers.get('location'), '/room/' + room.id);
+    assert.equal(join.headers.get('location'), '/?room=' + room.id);
+    const lookup = await fetch(joinUrl, { headers: { Accept: 'application/json' } });
+    assert.deepEqual(await lookup.json(), { id: room.id });
     assert.match(await (await fetch(origin + '/join')).text(), /name="code"/);
-    assert.equal(room.invites[0].url, origin + '/room/' + room.id);
+    assert.equal(room.invites[0].url, origin + '/?room=' + room.id);
     const qr = await fetch(origin + '/qr/' + room.id + '.png?network=0');
     assert.equal(qr.status, 200);
     const image = Buffer.from(await qr.arrayBuffer());
@@ -198,6 +220,9 @@ test('room serves a QR, relays PCM and phone diagnostics, and closes its listene
     const [idle] = await once(listener, 'message');
     assert.deepEqual(JSON.parse(idle), { type: 'source', source: null });
     assert.deepEqual(JSON.parse((await newListener)[0]), { type: 'listeners', count: 1, phones: [{ id: 1, ready: false, speaker: 'copy' }] });
+    const bufferMode = once(listener, 'message');
+    host.send(JSON.stringify({ type: 'buffer', ms: 125 }));
+    assert.deepEqual(JSON.parse((await bufferMode)[0]), { type: 'buffer', ms: 125 });
     const pong = once(listener, 'message');
     listener.send(JSON.stringify({ type: 'ping', sent: 123 }));
     const reply = JSON.parse((await pong)[0]);
@@ -240,7 +265,8 @@ test('room serves a QR, relays PCM and phone diagnostics, and closes its listene
     assert.equal((await ended)[0], 4001);
     assert.equal((await fetch(origin + '/qr/' + room.id + '.png')).status, 404);
     const expired = await fetch(joinUrl, { redirect: 'manual' });
-    assert.equal(expired.headers.get('location'), '/join?expired=1');
+    assert.equal(expired.headers.get('location'), '/?join=1&expired=1');
+    assert.equal((await fetch(joinUrl, { headers: { Accept: 'application/json' } })).status, 404);
   } finally {
     for (const socket of sockets) socket.terminate();
     await new Promise(resolve => server.close(resolve));
@@ -332,6 +358,37 @@ test('Auto Tune targets one phone and reapplies room delays after a slower phone
     assert.deepEqual((await roster).phones.map(phone => phone.measurement), [60, 170]);
   } finally {
     for (const ws of sockets) ws.terminate();
+    await new Promise(resolve => relay.close(resolve));
+  }
+});
+
+test('screen-off player gets a live stereo MP3 stream and closes with its room', { timeout: 6000 }, async () => {
+  const relay = createRelay();
+  relay.listen(0, '127.0.0.1');
+  await once(relay, 'listening');
+  const origin = 'http://127.0.0.1:' + relay.address().port;
+  const host = new WebSocket(origin.replace('http:', 'ws:') + '/live/host', { origin });
+  const stream = new AbortController();
+  try {
+    const [welcome] = await once(host, 'message');
+    const { id } = JSON.parse(welcome);
+    const listeners = once(host, 'message');
+    const url = origin + '/listen/' + id + '.mp3';
+    const response = await fetch(url, { signal: stream.signal });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('content-type'), 'audio/mpeg');
+    assert.deepEqual(JSON.parse((await listeners)[0]), { type: 'listeners', count: 1, phones: [], background: 1 });
+    const reader = response.body.getReader();
+    const { value } = await reader.read();
+    assert.equal(value[0], 255);
+    assert.equal(value[1] & 224, 224);
+    assert.equal(value[2] >> 4, 11); // 192 kbps in the MPEG-1 Layer III bitrate table.
+    host.close();
+    while (!(await reader.read()).done) { /* Drain frames already buffered by the response. */ }
+    assert.equal((await fetch(url)).status, 404);
+  } finally {
+    stream.abort();
+    host.terminate();
     await new Promise(resolve => relay.close(resolve));
   }
 });
