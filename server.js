@@ -7,7 +7,7 @@ import QRCode from 'qrcode';
 import { WebSocketServer, WebSocket } from 'ws';
 import { httpsOrigin } from './origin.js';
 import { BackgroundStream } from './background-stream.js';
-import { MAX_PACKET_BYTES, MAX_TUNE_OFFSET_MS, PLAYBACK_BUFFERS, PLAYBACK_STATES, readPacket, ROOM_SOURCES, SPEAKER_MODES, TUNE_SEPARATION_MS } from './public/protocol.js';
+import { HOSTED_BUFFER_MS, MAX_PACKET_BYTES, MAX_TUNE_OFFSET_MS, PLAYBACK_BUFFERS, PLAYBACK_STATES, readPacket, ROOM_SOURCES, SPEAKER_MODES, TUNE_SEPARATION_MS } from './public/protocol.js';
 
 const ROOM_ID = /^[a-f0-9]{32}$/;
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -138,7 +138,8 @@ export function createRelay({ lanHost = process.env.LAN_HOST, frontendOrigin = p
           : networks.map(({ address, name }) => ({
             name, url: 'http://' + address + ':' + server.address().port + '/?room=' + id,
           }));
-        const activeRoom = { host: ws, invites, listeners: new Set(), source: null, nextPhone: 1, tuning: null, buffer: PLAYBACK_BUFFERS[0] };
+        const buffer = hostedOrigin ? HOSTED_BUFFER_MS : PLAYBACK_BUFFERS[0];
+        const activeRoom = { host: ws, invites, listeners: new Set(), source: null, nextPhone: 1, tuning: null, buffer };
         rooms.set(id, activeRoom);
         send(ws, { type: 'room', id, code, invites });
         ws.on('message', (data, binary) => handleMessage(ws, activeRoom, data, binary));
@@ -155,7 +156,7 @@ export function createRelay({ lanHost = process.env.LAN_HOST, frontendOrigin = p
         ws.speaker = 'copy';
         room.listeners.add(ws);
         send(ws, { type: 'source', source: room.source });
-        if (room.buffer !== PLAYBACK_BUFFERS[0]) send(ws, { type: 'buffer', ms: room.buffer });
+        if (hostedOrigin || room.buffer !== PLAYBACK_BUFFERS[0]) send(ws, { type: 'buffer', ms: room.buffer });
         if (room.tuning) send(ws, { type: 'tune-state', active: true });
         reportListeners(room);
         ws.on('message', (data, binary) => handleMessage(ws, room, data, binary));

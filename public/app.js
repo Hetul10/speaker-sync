@@ -1,5 +1,5 @@
 import { BUFFER_MS, outputClock, Playback, RelayClock } from './audio.js';
-import { MAX_PACKET_BYTES, PHONE_BOOST_DB, PLAYBACK_BUFFERS, SIGNAL_WINDOW_MS, SOUND_THRESHOLD, SPEAKER_MODES, TUNE_SEPARATION_MS } from './protocol.js';
+import { HOSTED_BUFFER_MS, MAX_PACKET_BYTES, PHONE_BOOST_DB, PLAYBACK_BUFFERS, SIGNAL_WINDOW_MS, SOUND_THRESHOLD, SPEAKER_MODES, TUNE_SEPARATION_MS } from './protocol.js';
 import { audioTime, captureTones, measureOffset, playTone } from './tune.js';
 
 const $ = id => document.getElementById(id);
@@ -10,6 +10,7 @@ const roomParam = params.get('room');
 let roomId = roomPattern.test(roomParam ?? '') ? roomParam : location.pathname.match(roomPath)?.[1];
 const isLocal = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
 const hostedRelay = document.querySelector('meta[name="speaker-sync-relay"]')?.content;
+const defaultBuffer = hostedRelay ? HOSTED_BUFFER_MS : BUFFER_MS;
 const relayOrigin = hostedRelay || location.origin;
 const isHostPage = isLocal || Boolean(hostedRelay && location.protocol === 'https:');
 let joinOnly = params.has('join') || location.pathname === '/join' || !isHostPage;
@@ -335,7 +336,7 @@ function showHost() {
   $('capture-source').disabled = Boolean(host?.pending || captureModes[source]);
   $('keep-local').disabled = $('capture-source').disabled;
   $('playback-buffer').disabled = Boolean(host?.tuning);
-  $('playback-buffer').value = host?.buffer ?? BUFFER_MS;
+  $('playback-buffer').value = host?.buffer ?? defaultBuffer;
   $('test').textContent = source === 'click' ? 'Stop test click' : 'Play test click';
   $('host-sync').querySelector('input').disabled = windowsPlayback || Boolean(host?.tuning);
   $('host-sync').querySelector('button').disabled = windowsPlayback || Boolean(host?.tuning);
@@ -439,7 +440,7 @@ function startHost() {
   if (joining || host) return;
   notice();
   pairNotice();
-  const session = { count: 0, source: null, speaker: 'copy', buffer: BUFFER_MS };
+  const session = { count: 0, source: null, speaker: 'copy', buffer: defaultBuffer };
   Object.assign(session, socketFor('/live/host', {
     clock: showHost,
     message(message) {
@@ -684,7 +685,7 @@ async function listen() {
   }
   notice();
   useMediaAudioSession();
-  const session = { source: null, buffer: BUFFER_MS };
+  const session = { source: null, buffer: defaultBuffer };
   phone = session;
   try {
     session.context = new AudioContextClass({ latencyHint: 'interactive' });
@@ -844,7 +845,7 @@ if (!isCaptureTest) {
     else if (!$('host').hidden) showHostDiagnostics();
     const session = roomId ? phone : host;
     const playback = roomId ? session?.playback : session?.audio?.playback;
-    const stats = [roomId && $('background-audio').hasAttribute('src') ? 'Screen-off stream' : (session?.buffer ?? BUFFER_MS) + ' ms playback buffer'];
+    const stats = [roomId && $('background-audio').hasAttribute('src') ? 'Screen-off stream' : (session?.buffer ?? defaultBuffer) + ' ms playback buffer'];
     if (session?.clock?.rtt != null) stats.push(session.clock.rtt + ' ms relay RTT');
     if (playback?.late) stats.push(playback.late + ' late blocks');
     $('metrics').textContent = stats.join(' · ');

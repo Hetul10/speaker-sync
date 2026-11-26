@@ -4,6 +4,7 @@ export const BUFFER_MS = PLAYBACK_BUFFERS[0];
 const SCHEDULE_AHEAD_S = 0.085;
 const MIN_LEAD_S = 0.008;
 const MAX_RATE_ADJUSTMENT = 0.008;
+const MAX_QUEUED_BLOCKS = 150;
 
 export class RelayClock {
   samples = [];
@@ -67,7 +68,7 @@ export class Playback {
     if (!block) return;
     this.lastReceived = performance.now();
     if (!this.clock.ready || this.context.state !== 'running') return;
-    if (this.queue.length >= 125) this.queue.shift();
+    if (this.queue.length >= MAX_QUEUED_BLOCKS) this.queue.shift();
     this.queue.push(block);
     this.pump();
   }

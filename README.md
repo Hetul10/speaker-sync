@@ -43,7 +43,7 @@ The host shows **Sharing tab audio** once capture starts. **Laptop signal**, **L
 
 ## Sound quality and screen-off listening
 
-- **Listen** plays uncompressed stereo PCM and supports speaker routing and Auto Tune. If you hear crackles or the late-block count keeps rising, open **Playback settings and diagnostics** on the laptop and try **Smooth** (125 ms) or **Stable** (200 ms). The room starts at 75 ms.
+- **Listen** plays uncompressed stereo PCM and supports speaker routing and Auto Tune. If you hear crackles or the late-block count keeps rising, open **Playback settings and diagnostics** on the laptop and try a larger playback buffer. Local rooms start at 75 ms. Hosted rooms start at 350 ms to allow for the internet relay.
 - Synced phone playback defaults to **+3 dB**. **Volume boost** adjusts this from 0 to +6 dB with peak limiting. The phone’s own media volume still applies.
 - On iPhone, open the room in Safari and tap **Listen with screen off**. Wait until the stream is playing before locking the phone. This uses Safari’s native media player and a 192 kbps stereo MP3 stream, with the full mix and extra delay. Use ordinary **Listen** for Auto Tune and stereo speaker assignments. Keep the host room open.
 
@@ -78,7 +78,7 @@ Use Auto Tune with the room idle, the built-in test click, or synchronized Chrom
 4. Pair a Bluetooth speaker to the phone and repeat the alignment. Bluetooth output can add latency the browser cannot observe directly. If the phone speaker is later, add delay to the Windows speaker.
 5. Try regular tab audio, then test Netflix separately. Protected playback can block capture or provide silence. Video remains on the source tab and is outside the audio sync target.
 
-Playback uses a 75 ms shared buffer plus any per-device calibration. The host’s AudioWorklet packages 10 ms stereo PCM blocks with a sequence number and source sample index. Devices estimate relay clock offset with repeated ping/pong exchanges, translate deadlines with Web Audio output timestamps where available, and use small playback-rate corrections to maintain continuity as clocks drift. A late block is dropped so stale audio cannot build up into a second delayed stream.
+Playback uses a shared buffer plus any per-device calibration. The host’s AudioWorklet packages 10 ms stereo PCM blocks with a sequence number and source sample index. Devices estimate relay clock offset with repeated ping/pong exchanges, translate deadlines with Web Audio output timestamps where available, and use small playback-rate corrections to maintain continuity as clocks drift. A late block is dropped so stale audio cannot build up into a second delayed stream.
 
 ## Automated checks
 

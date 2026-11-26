@@ -5,7 +5,8 @@ export const SIGNAL_WINDOW_MS = 2000;
 export const PLAYBACK_STATES = ['waiting', 'receiving', 'silent', 'scheduled'];
 export const ROOM_SOURCES = ['tab', 'window', 'desktop', 'click'];
 export const SPEAKER_MODES = ['copy', 'left', 'right'];
-export const PLAYBACK_BUFFERS = [75, 125, 200];
+export const HOSTED_BUFFER_MS = 350;
+export const PLAYBACK_BUFFERS = [75, 125, 200, HOSTED_BUFFER_MS];
 export const PHONE_BOOST_DB = 3;
 
 export function boostSample(sample, gain) {

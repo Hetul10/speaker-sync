@@ -162,8 +162,12 @@ test('hosted rooms accept the frontend origin and return public invitations', { 
     await qr.arrayBuffer();
 
     const listener = connect('/live/room/' + id, frontendOrigin);
-    const [message] = await once(listener, 'message');
-    assert.deepEqual(JSON.parse(message), { type: 'source', source: null });
+    const messages = [];
+    await new Promise(resolve => listener.on('message', data => {
+      messages.push(JSON.parse(data));
+      if (messages.length === 2) resolve();
+    }));
+    assert.deepEqual(messages, [{ type: 'source', source: null }, { type: 'buffer', ms: 350 }]);
   } finally {
     for (const socket of sockets) socket.terminate();
     await new Promise(resolve => server.close(resolve));
